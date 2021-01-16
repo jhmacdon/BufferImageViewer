@@ -207,6 +207,9 @@
         [self.doneButton setAccessibilityLabel:BFRImageViewerLocalizedStrings(@"imageViewController.closeButton.text", @"Close")];
         [self.doneButton setImage:crossImage forState:UIControlStateNormal];
         [self.doneButton addTarget:self action:@selector(handleDoneAction) forControlEvents:UIControlEventTouchUpInside];
+        if (@available(iOS 13.4, *)) {
+            [self.doneButton setPointerInteractionEnabled:YES];
+        }
         
         [self.view addSubview:self.doneButton];
         [self.view bringSubviewToFront:self.doneButton];

@@ -15,6 +15,8 @@
 #import <PINRemoteImage/PINAnimatedImageView.h>
 #import <PINRemoteImage/PINRemoteImage.h>
 #import <PINRemoteImage/PINImageView+PINRemoteImage.h>
+#import <AVKit/AVKit.h>
+#import <AVFoundation/AVFoundation.h>
 
 @interface BFRImageContainerViewController () <UIScrollViewDelegate, UIGestureRecognizerDelegate>
 
@@ -35,6 +37,8 @@
 
 /*! If the imgSrc property requires a network call, this displays inside the view to denote the loading progress. */
 @property (strong, nonatomic, nullable) BFRImageViewerDownloadProgressView *progressView;
+
+@property (strong, nonatomic, nullable) UIButton *playButton;
 
 /*! The animator which attaches the behaviors needed to drag the image. */
 @property (strong, nonatomic, nonnull) UIDynamicAnimator *animator;
@@ -64,6 +68,7 @@
 - (void)viewDidLoad {
     [super viewDidLoad];
     
+    NSLog(@"Photo Viewer Loaded");
     // View setup
     self.view.backgroundColor = [UIColor clearColor];
     
@@ -95,6 +100,9 @@
             self.assetType = BFRImageAssetTypeLivePhoto;
             [self createProgressView];
             [self retrieveLivePhotoFromAsset];
+        } else if (assetSource.mediaType == PHAssetMediaTypeVideo) {
+            self.assetType = BFRImageAssetTypeImage;
+            [self retrieveVideoImageFromAsset];
         } else {
             self.assetType = BFRImageAssetTypeImage;
             [self retrieveImageFromAsset];
@@ -118,6 +126,11 @@
         self.assetType = BFRImageAssetTypeUnknown;
         [self showError];
     }
+}
+
+-(void)viewDidAppear:(BOOL)animated {
+    [super viewDidAppear:animated];
+    NSLog(@"Photo Viewer Appeared");
 }
 
 - (void)viewWillLayoutSubviews {
@@ -435,12 +448,59 @@
     }
 }
 
+- (void)playVideo {
+    [self createProgressView];
+    [self hidePlayButton];
+    PHVideoRequestOptions *reqOptions = [PHVideoRequestOptions new];
+    reqOptions.deliveryMode = PHImageRequestOptionsDeliveryModeHighQualityFormat;
+    reqOptions.networkAccessAllowed = YES;
+    reqOptions.version = PHVideoRequestOptionsVersionOriginal;
+
+    reqOptions.progressHandler = ^(double progress, NSError *error, BOOL *stop, NSDictionary *info) {
+        NSLog(@"%f", progress); //follow progress + update progress bar
+        dispatch_async(dispatch_get_main_queue(), ^{
+            self.progressView.progress = progress;
+        });
+    };
+    
+    [[PHImageManager defaultManager] requestAVAssetForVideo:self.imgSrc options:reqOptions resultHandler:^(AVAsset * _Nullable asset, AVAudioMix * _Nullable audioMix, NSDictionary * _Nullable info) {
+        
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [self.progressView removeFromSuperview];
+            [self showPlayButton];
+        });
+
+        AVPlayerItem *anItem = [AVPlayerItem playerItemWithAsset:asset];
+        AVPlayer * player = [AVPlayer playerWithPlayerItem:anItem];
+        
+        dispatch_async(dispatch_get_main_queue(), ^{
+          AVPlayerViewController * controller = [[AVPlayerViewController alloc] init];
+          controller.player = player;
+          
+          [self presentViewController:controller animated:true completion:^{
+              [[controller player] play];
+          }];
+        });
+        
+    
+//        AVPlayerLayer * layer = [AVPlayerLayer playerLayerWithPlayer:player];
+//        layer.frame = [self view].bounds;
+//
+//        layer.videoGravity = kCAGravityResizeAspect;
+//
+//        player.play;
+    }];
+}
+
 #pragma mark - Image Asset Retrieval
 
 - (void)retrieveImageFromAsset {
     PHImageRequestOptions *reqOptions = [PHImageRequestOptions new];
-    reqOptions.synchronous = YES;
 
+    reqOptions.synchronous = NO;
+    reqOptions.networkAccessAllowed = YES;
+    
     [[PHImageManager defaultManager] requestImageDataForAsset:self.imgSrc options:reqOptions resultHandler:^(NSData *imageData, NSString *dataUTI, UIImageOrientation orientation, NSDictionary *info) {
         self.imgLoaded = [UIImage imageWithData:imageData];
         [self addImageToScrollView];
@@ -451,6 +511,8 @@
     PHLivePhotoRequestOptions *liveOptions = [PHLivePhotoRequestOptions new];
     liveOptions.networkAccessAllowed = YES;
     liveOptions.deliveryMode = PHImageRequestOptionsDeliveryModeHighQualityFormat;
+    liveOptions.networkAccessAllowed = YES;
+    
     liveOptions.progressHandler = ^(double progress, NSError *error, BOOL *stop, NSDictionary *info) {
         dispatch_async(dispatch_get_main_queue(), ^{
             if (self.progressView == nil) [self createProgressView];
@@ -460,11 +522,38 @@
     
     PHAsset *asset = (PHAsset *)self.imgSrc;
     [[PHImageManager defaultManager] requestLivePhotoForAsset:(PHAsset *)self.imgSrc targetSize:CGSizeMake(asset.pixelWidth, asset.pixelHeight) contentMode:PHImageContentModeAspectFit options:liveOptions resultHandler:^(PHLivePhoto *livePhoto, NSDictionary *info) {
+        NSLog(@"reponse %@", info);
+        NSLog(@"got image %f %f", livePhoto.size.width, livePhoto.size.height);
         [self.progressView removeFromSuperview];
         self.liveImgLoaded = livePhoto;
         [self addImageToScrollView];
         [self createLivePhotoChrome];
     }];
+}
+
+- (void)retrieveVideoImageFromAsset {
+    PHImageRequestOptions *reqOptions = [PHImageRequestOptions new];
+    reqOptions.deliveryMode = PHImageRequestOptionsDeliveryModeHighQualityFormat;
+    reqOptions.synchronous = NO;
+    reqOptions.networkAccessAllowed = YES;
+
+    reqOptions.progressHandler = ^(double progress, NSError *error, BOOL *stop, NSDictionary *info) {
+        NSLog(@"Updating progress %f", progress);
+        NSLog(@"%f", progress); //follow progress + update progress bar
+    };
+    
+    [[PHImageManager defaultManager] requestImageForAsset:self.imgSrc targetSize:self.view.frame.size contentMode:PHImageContentModeAspectFill options:reqOptions resultHandler:^(UIImage *image, NSDictionary *info) {
+        NSLog(@"reponse %@", info);
+        NSLog(@"got image %f %f", image.size.width, image.size.height);
+        self.imgLoaded = image;
+        [self addImageToScrollView];
+        [self createPlayButton];
+    }];
+    
+//    [[PHImageManager defaultManager] requestImageDataForAsset:self.imgSrc options:reqOptions resultHandler:^(NSData *imageData, NSString *dataUTI, UIImageOrientation orientation, NSDictionary *info) {
+//        self.imgLoaded = [UIImage imageWithData:imageData];
+//        [self addImageToScrollView];
+//    }];
 }
 
 - (void)retrieveImageFromPINCachedAnimatedImage {
@@ -531,13 +620,72 @@
     
     [tb.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor].active = YES;
     [tb.widthAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.widthAnchor].active = YES;
-    [tb.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor].active = YES;[tb.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor].active = YES;
+    [tb.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor].active = YES;
+    [tb.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor].active = YES;
     [tb.widthAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.widthAnchor].active = YES;
     [tb.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor].active = YES;
 }
 
 - (void)dismissImageViewer {
     [[NSNotificationCenter defaultCenter] postNotificationName:NOTE_VC_SHOULD_DISMISS object:nil];
+}
+
+- (void)createPlayButton {
+    UIImageSymbolConfiguration *symbolConfig = [UIImageSymbolConfiguration configurationWithPointSize:50 weight:UIImageSymbolWeightMedium];
+    UIImage *playImage = [UIImage systemImageNamed:@"play.circle.fill" withConfiguration:symbolConfig];
+    
+    UIImage *newImage = [playImage imageWithRenderingMode:UIImageRenderingModeAlwaysTemplate];
+    UIGraphicsBeginImageContextWithOptions(playImage.size, NO, newImage.scale);
+    [[UIColor whiteColor] set];
+    [newImage drawInRect:CGRectMake(0, 0, playImage.size.width, newImage.size.height)];
+    newImage = UIGraphicsGetImageFromCurrentImageContext();
+    UIGraphicsEndImageContext();
+    
+    self.playButton = [[UIButton alloc] init];
+    [self.playButton addTarget:self action:@selector(playVideo) forControlEvents:UIControlEventTouchUpInside];
+
+    [self.view addSubview:self.playButton];
+    [self.playButton.centerXAnchor constraintEqualToAnchor:self.view.centerXAnchor].active = YES;
+    [self.playButton.centerYAnchor constraintEqualToAnchor:self.view.centerYAnchor].active = YES;
+    [self.playButton.widthAnchor constraintEqualToConstant:150].active = YES;
+    [self.playButton.heightAnchor constraintEqualToConstant:150].active = YES;
+    self.playButton.translatesAutoresizingMaskIntoConstraints = NO;
+    
+    //UIImage *shadowImage = [self imageWithShadow:newImage];
+    [self.playButton setImage: newImage forState:UIControlStateNormal];
+
+
+//    UIBarButtonItem *livePhotoBarButton = [[UIBarButtonItem alloc] initWithImage:livePhotoBadge style:UIBarButtonItemStylePlain target:nil action:nil];
+//
+//    UIBarButtonItem *flexSpace = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemFlexibleSpace target:nil action:nil];
+//
+//    self.shareBarButtonItem = [[UIBarButtonItem alloc] initWithBarButtonSystemItem:UIBarButtonSystemItemAction target:self action:@selector(presentActivityController)];
+//
+//    UIToolbar *tb = [UIToolbar new];
+//    tb.tintColor = [UIColor whiteColor];
+//    [self.view addSubview:tb];
+//    tb.items = @[livePhotoBarButton, flexSpace, self.shareBarButtonItem];
+//    [tb setBackgroundImage:[UIImage new] forToolbarPosition:UIBarPositionAny barMetrics:UIBarMetricsDefault];
+//    [tb setShadowImage:[UIImage new] forToolbarPosition:UIBarPositionAny];
+//    tb.translatesAutoresizingMaskIntoConstraints = NO;
+//
+//    [tb.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor].active = YES;
+//    [tb.widthAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.widthAnchor].active = YES;
+//    [tb.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor].active = YES;[tb.bottomAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.bottomAnchor].active = YES;
+//    [tb.widthAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.widthAnchor].active = YES;
+//    [tb.centerXAnchor constraintEqualToAnchor:self.view.safeAreaLayoutGuide.centerXAnchor].active = YES;
+}
+
+-(void)hidePlayButton {
+    self.playButton.hidden = YES;
+}
+
+-(void)showPlayButton {
+    self.playButton.hidden = NO;
+}
+
+- (void)dismissUI {
+    //[[NSNotificationCenter defaultCenter] postNotificationName:NOTE_VC_SHOULD_DISMISS object:nil];
 }
 
 - (void)dimissUIFromDraggingGesture {
@@ -556,6 +704,27 @@
 
 - (void)handlePop {
     self.activeAssetView.layer.cornerRadius = 0.0f;
+}
+
+- (UIImage *)imageWithShadow:(UIImage *)image {
+  
+  CGColorSpaceRef colourSpace = CGColorSpaceCreateDeviceRGB();
+  CGFloat imageWidth = image.size.width;
+  CGFloat imageHeight = image.size.height;
+  
+  CGContextRef shadowContext = CGBitmapContextCreate(NULL, imageWidth, imageHeight, CGImageGetBitsPerComponent(image.CGImage), 0, colourSpace, (CGBitmapInfo)kCGImageAlphaPremultipliedLast);
+  CGColorSpaceRelease(colourSpace);
+  
+  CGContextSetShadowWithColor(shadowContext, CGSizeMake(1, -1), 2, [UIColor darkGrayColor].CGColor);
+  CGContextDrawImage(shadowContext, CGRectMake(0, 0, image.size.width, image.size.height), image.CGImage);
+  
+  CGImageRef shadowedCGImage = CGBitmapContextCreateImage(shadowContext);
+  CGContextRelease(shadowContext);
+  
+  UIImage * shadowedImage = [UIImage imageWithCGImage:shadowedCGImage];
+  CGImageRelease(shadowedCGImage);
+  
+  return shadowedImage;
 }
 
 @end
